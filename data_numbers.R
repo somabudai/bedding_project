@@ -12,11 +12,11 @@ library(ggpubr)
 
 con <- dbConnect(
   drv = RMariaDB::MariaDB(),
-  username = "soma",
-  password = "heR6w12o",
-  host = "193.204.44.99",
-  port = 3306,
-  dbname = "dmaks_3"
+  username = "",
+  password = "",
+  host = "",
+  port = ,
+  dbname = ""
 )
 
 age_global_events <- read.csv('climate_spreadsheet.csv')
