@@ -14,12 +14,12 @@ library(ggpubr)
 
 selected_sys_type <- c('sandy system')
 selected_element <- c('terminal deposit')
-selected_climate <- c('greenhouse','icehouse')
+selected_climate <- c('greenhouse','icehouse','uncertain') #c('greenhouse','icehouse','uncertain')
 
 if (length(selected_element) != 1) {stop('Select only one architectural element to modell!')}
 
 #SET N-G
-try_to_force_NG <- TRUE
+try_to_force_NG <- FALSE
 selected_NG_margin <- 0.05
 
 mean_NG_value <- element_ng_thck_element_type %>% 
@@ -35,8 +35,8 @@ selected_NG_value <- mean_NG_value #change this for specific NG value
 #BED FREQUENCY
 stochastic_bed_frequency <- TRUE
 
+#include and exclude certain bed types
 include_SM_beds <- TRUE
-
 include_G_beds <- TRUE
 
 #THICKNESS ATTRIBUTES
@@ -55,19 +55,47 @@ selected_bed_number <- estimated_bed_number #Change this for specific bed number
 selected_bed_number
 
 #SEED
-seed <- 2
+seed <- 3
 
 ### CODE --------------------
 
 #BED NUMBERS
 
 #calculate the frequency of each bed type given the input parameters
-selected_bed_frequency <- beds_table_sandgs_lam_features %>% 
-  filter(element_general_type %in% selected_element) %>% 
-  filter(climate %in% selected_climate) %>%
-  filter(sys_gs_category %in% selected_sys_type) %>% 
-  group_by(code) %>% summarise(n = n()) %>% ungroup() %>%
-  mutate(sum_n = sum(n)) %>% mutate(percent = n/sum_n*100)
+
+if (include_SM_beds == TRUE & include_G_beds == TRUE) {
+  selected_bed_frequency <- beds_table_sandgs_lam_features %>% 
+    filter(element_general_type %in% selected_element) %>% 
+    filter(climate %in% selected_climate) %>%
+    filter(sys_gs_category %in% selected_sys_type) %>% 
+    group_by(code) %>% summarise(n = n()) %>% ungroup() %>%
+    mutate(sum_n = sum(n)) %>% mutate(percent = n/sum_n*100)
+  } else if (include_SM_beds == FALSE & include_G_beds == TRUE) {
+    selected_bed_frequency <- beds_table_sandgs_lam_features %>% 
+      filter(element_general_type %in% selected_element) %>% 
+      filter(climate %in% selected_climate) %>%
+      filter(sys_gs_category %in% selected_sys_type) %>% 
+      filter(gs_category != 'SM') %>%
+      group_by(code) %>% summarise(n = n()) %>% ungroup() %>%
+      mutate(sum_n = sum(n)) %>% mutate(percent = n/sum_n*100) 
+  } else if (include_SM_beds == TRUE & include_G_beds == FALSE) {
+    selected_bed_frequency <- beds_table_sandgs_lam_features %>% 
+      filter(element_general_type %in% selected_element) %>% 
+      filter(climate %in% selected_climate) %>%
+      filter(sys_gs_category %in% selected_sys_type) %>% 
+      filter(!gs_category %in% c('G','sG','gS')) %>%
+      group_by(code) %>% summarise(n = n()) %>% ungroup() %>%
+      mutate(sum_n = sum(n)) %>% mutate(percent = n/sum_n*100)
+  } else if (include_SM_beds == FALSE & include_G_beds == FALSE) {
+    selected_bed_frequency <- beds_table_sandgs_lam_features %>% 
+      filter(element_general_type %in% selected_element) %>% 
+      filter(climate %in% selected_climate) %>%
+      filter(sys_gs_category %in% selected_sys_type) %>% 
+      filter(!gs_category %in% c('G','sG','gS', 'SM')) %>%
+      group_by(code) %>% summarise(n = n()) %>% ungroup() %>%
+      mutate(sum_n = sum(n)) %>% mutate(percent = n/sum_n*100)
+  } else {stop('Invalid include_SM_beds and/or include_G_beds value try TRUE or FALSE')}
+
 
 if (nrow(selected_bed_frequency) == 0) {stop('Filtering the bed table gave no result!')}
 
@@ -303,13 +331,15 @@ if (try_to_force_NG == TRUE) {
       mud_thickness_list <- rlnorm(number_of_mud_beds,meanlog_mud,sdlog_mud)
       sum_mud_thickness <- sum(unlist(mud_thickness_list))
       print(sum_mud_thickness)
-      modelled_NG <- round(sum_sand_thickness/(sum_sand_thickness+sum_mud_thickness),2)
+      modelled_element_thickness <- sum_sand_thickness+sum_mud_thickness
+      modelled_NG <- round(sum_sand_thickness/modelled_element_thickness,2)
       ng_calc <- 'forced'
   }
 } else if(try_to_force_NG == FALSE) {
   set.seed(seed)
   mud_thickness_list <- rlnorm(number_of_mud_beds,meanlog_mud,sdlog_mud)
   sum_mud_thickness <- sum(unlist(mud_thickness_list))
+  
   modelled_NG <- round(sum_sand_thickness/(sum_sand_thickness+sum_mud_thickness),2)
   ng_calc <- 'not forced'}  
 
@@ -332,20 +362,26 @@ combined_df_beds <- combined_df %>% dplyr::select(code,thck,n)
 #dataframe for muddy intervals
 combined_df_mud <- combined_df %>% dplyr::select(trans,n_2) %>% filter(trans == 'M') %>% rename('code' = 'trans', 'n' = 'n_2')
 
-#create dataframe for mud intervals and their thickness with the same order number
-combined_df_mud_order <- combined_df_mud %>% pull(n) %>% as.list()
-mud_df <- data.frame(n = unlist(combined_df_mud_order), thck = unlist(mud_thickness_list))
-combined_df_mud <- left_join(combined_df_mud, mud_df, by = 'n')
+if (nrow(combined_df_mud) == 0) {combined_df_ordered <- combined_df} else {
+  
+  #create dataframe for mud intervals and their thickness with the same order number
+  combined_df_mud_order <- combined_df_mud %>% pull(n) %>% as.list()
+  mud_df <- data.frame(n = unlist(combined_df_mud_order), thck = unlist(mud_thickness_list))
+  combined_df_mud <- left_join(combined_df_mud, mud_df, by = 'n')
+  
+  #union of the two dataframes and arranged by assigned number to generate vertical trend
+  combined_df_ordered <- union(combined_df_beds, combined_df_mud) %>% arrange(n)
+  
+}
 
-#union of the two dataframes and arranged by assigned number to generate vertical trend
-combined_df_ordered <- union(combined_df_beds, combined_df_mud) %>% arrange(n)
+
 
 #REPORT
 
 report_df <- data.frame(
   variable = c('seed','selected system type','selected element', 'selected climate', 'force net-to-gross', 'selected net-to-gross',
-               'net-to-gross margin','modeled net-to-gross', 'stochastic bed frequency', 'selected bed number', 'selected sand thickness (m)',
-               'sand thickness margin', 'modeled sand thickness', 'vertical trend'),
+               'net-to-gross margin','modelled net-to-gross', 'stochastic bed frequency', 'selected bed number', 'selected sand thickness (m)',
+               'sand thickness margin', 'modelled sand thickness (m)', 'modelled mud thickness (m)', 'modelled element thickness (m)' ,'vertical trend'),
   value = c(seed,
             paste(selected_sys_type, collapse = ','),
             paste(selected_element, collapse = ','),
@@ -359,6 +395,8 @@ report_df <- data.frame(
             selected_sand_thickness,
             selected_sand_thickness_margin,
             round(sum_sand_thickness,2),
+            round(sum_mud_thickness,2),
+            round(sum_sand_thickness,2)+round(sum_mud_thickness,2),
             round(calculated_log_trend_value,2))
             )
 
@@ -384,34 +422,54 @@ df_for_log <- combined_df_ordered %>% mutate(facies_top = cumsum(thck)) %>% muta
 
 df_for_log <- left_join(df_for_log, colors_phi_df, by = 'code')
 
-title <- paste(selected_sys_type, selected_element, selected_climate, sep = ' ')
+title <- paste(selected_sys_type, selected_element, paste(selected_climate, collapse = ','), sep = ' ')
 subtitle <- paste('seed =', seed, ' N/G = ', modelled_NG, ng_calc, ' sand thickness =', selected_sand_thickness, 'sand mean thck =', round(modeled_thck_avg,2), '\n log trend =', round(calculated_log_trend_value,3))
 
-
-log_plot <- ggplot(df_for_log) + geom_rect(xmin = 0, color = 'black', aes(xmax = phi, ymin = facies_base, ymax=facies_top, fill = color))+
+log_plot <- ggplot(df_for_log) + geom_rect(xmin = 0, color = 'black', aes(xmax = phi, ymin = facies_base, ymax=facies_top, fill = color), lwd = 0.12)+
   scale_fill_identity(guide = 'legend', labels = df_for_log$code, breaks = df_for_log$color)+
   scale_x_continuous(expand = c(0,0), limits = c(0,5), breaks = seq(1,5, by = 1), labels = c('1' = 'M', '2' = 'SM', '3' = 'S', '4' = 'sG', '5' = 'G'))+
   scale_y_continuous(expand = c(0,0), breaks = seq(0,sum_mud_thickness+sum_sand_thickness, by=1))+
   labs(title = title,
        subtitle = subtitle)+
-  theme_classic()
+  theme_classic()+
+  theme(
+    axis.line = element_line(colour = 'black', size = 0.24),
+    axis.ticks = element_line(colour = 'black', size = 0.24),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 9),
+    axis.text.x = element_text(color = "black", size = 7),
+    legend.position = 'bottom',
+    legend.text = element_text(size = 7),
+    legend.key.height = unit(4.5, 'mm'),
+    legend.key.width = unit(6, 'mm')
+  )+
+  labs(
+    fill = 'Bed type'
+  )
 log_plot
-file_name <- paste('seed_',seed,'_ng_calc_', try_to_force_NG, '_sys_',selected_sys_type,'_element_',selected_element,'_climate_',selected_climate,'_selected_sand_thickness_',selected_sand_thickness, sep = '' )
 
 
-#CREATE DIRECTORY
+#CREATE DIRECTORY AND SAVING OUTPUTS
 
 #create folder for outputs
 
+time <- format(Sys.time(), '%Y_%m_%d_%H_%M_%S')
+file_name <- paste(seed, paste(selected_element, collapse = ','), time, sep = '_' )
 
-if(!file.exists('log_generator_outputs')) {
-  dir.create('log_generator_outputs')}
+main_dir <- 'log_generator_outputs'
+file_path <- paste('log_generator_outputs/',selected_element, sep='')
+
+if(!file.exists(main_dir)) {
+  dir.create(main_dir)}
+if(!file.exists(file_path)){
+  dir.create(file_path)
+}
 
 #SAVE OUTPUTS
 
-write.table(report_df, file = paste('log_generator_outputs/',file_name,'.txt', sep=''),sep = "\t",
-            row.names = FALSE, col.names = FALSE, quote = FALSE)
-ggsave(log_plot, filename = paste('log_generator_outputs/',file_name,'.pdf', sep=''), device = 'pdf')
+write.csv(report_df, file = paste(file_path,'/',file_name,'_attributes','.csv', sep=''), row.names = FALSE)
+write.csv(combined_df_ordered, file = paste(file_path,'/',file_name,'_log_df','.csv', sep=''), row.names = FALSE)
+ggsave(log_plot, filename = paste(file_path,'/',file_name,'_log','.pdf', sep=''), device = 'pdf')
 
 
 #WRITE CSVS
@@ -431,11 +489,16 @@ selected_NG_data <- element_ng_thck_element_type %>%
   filter(general_type %in% selected_element) %>% 
   filter(climate %in% selected_climate)
 
-ng_validating_plot <- ggplot(selected_NG_data, aes(x=general_type, y = NG))+
-  geom_boxplot(outlier.shape = 4, lwd=0.23, width = 0.9)+
+NG_data_counts <- selected_NG_data %>% group_by(general_type) %>% summarise(n = n())
+
+ng_validating_plot <- ggplot()+
+  geom_boxplot(data = selected_NG_data, aes(x=general_type, y = NG, fill = general_type), outlier.shape = 4, lwd=0.23, width = 0.7)+
   stat_summary(fun.y = 'mean', size = 0.2, shape = 15)+
-  geom_text(label = paste('n=',nrow(selected_NG_data), sep = ''), y=1, size = 7/.pt)+
-  geom_point(y = modelled_NG, size = 4, shape = 18, color = 'red')+
+  geom_text(data = NG_data_counts,aes(x= general_type, label = paste('n=',n, sep = '')), y=1.02, size = 7/.pt)+
+  geom_point(aes(x=selected_element,y = modelled_NG), size = 4, shape = 23, fill = 'red')+
+  scale_fill_manual(values = c('terminal deposit' = '#EFDC53',
+                               'channel' = '#5C8CC7',
+                               'levee' = '#7EC07C'))+
   theme_classic()+
   theme(
     axis.text.x = element_text(color = "black", size = 9),
@@ -445,8 +508,9 @@ ng_validating_plot <- ggplot(selected_NG_data, aes(x=general_type, y = NG))+
     axis.text.y = element_text(color = "black", size = 9),
     axis.title.y = element_text(color = "black", size = 9),
     plot.title = element_text(color = 'black', size = 10),
-    legend.position = 'bottom')+
+    legend.position = 'none')+
   labs(
+    title = 'Sand fraction',
     y= 'Sand fraction')
 ng_validating_plot
 
@@ -457,19 +521,22 @@ selected_bed_data <- beds_table_sandgs_lam_features %>%
   filter(sys_gs_category %in% selected_sys_type) %>%
   filter(code %in% present_bed_types)
 
+selected_bed_data<- left_join(selected_bed_data, colors_phi_df, by = 'code')
+
 selected_bed_data_summary <- selected_bed_data %>% group_by(code) %>% summarise(n = n())
 modeled_bed_data_summary <- combined_df %>% group_by(code) %>% summarise(n = n())
 
 bed_thickness_validating_plot <- ggplot(selected_bed_data, aes(x= code, y=bed_thickness))+
-  geom_boxplot(outlier.shape = NA, lwd=0.23, width = 0.9)+
+  geom_boxplot(aes(fill = color), outlier.shape = NA, lwd=0.23, width = 0.7)+
+  scale_fill_identity(guide = 'legend', labels = selected_bed_data$code, breaks = selected_bed_data$color)+
   stat_summary(fun.y = 'mean', size = 0.2, shape = 15)+
   geom_text(data = selected_bed_data_summary, aes(x=code, label = n), y = 2, size = 7/.pt)+
   coord_cartesian(ylim = c(0,2))+
-  geom_point(data = combined_df, aes(x =code, y=thck), size = 4, shape = 18, color = 'red', alpha = 0.5)+
+  geom_point(data = combined_df, aes(x =code, y=thck), size = 4, shape = 23, fill = 'red', alpha = 0.5)+
   geom_text(data = modeled_bed_data_summary , aes(x=code, label = n), y = 1.9, color = 'red', size = 7/.pt)+
   theme_classic()+
-  theme(legend.position = 'bottom')+
   theme(
+    legend.position = 'none',
     legend.text = element_text(size = 7),
     legend.title = element_text(face = 'bold', size = 7),
     axis.text.x = element_text(color = "black", size = 9, angle = 45, vjust = 1, hjust = 1),
@@ -479,26 +546,30 @@ bed_thickness_validating_plot <- ggplot(selected_bed_data, aes(x= code, y=bed_th
     axis.text.y = element_text(color = "black", size = 9),
     axis.title.y = element_text(color = "black", size = 9),
     plot.title = element_text(color = 'black', size = 10))+
-  labs(y= 'Bed thickness')
+  labs(
+    title = 'Sand bed thickness',
+    y= 'Bed thickness')
 bed_thickness_validating_plot
 
 
 #system wise
 
-bed_thickness_climate_sandy_gen_selected <- bed_thickness_climate_sandy_gen %>% filter(element_general_type == selected_element)
-bed_thickness_climate_sandy_gen_selected[nrow(bed_thickness_climate_sandy_gen_selected)+1,] = list('all',0,'all','all','all','modelled')
-ggplot(bed_thickness_climate_sandy_gen_selected, aes(x=sys_name, y = bed_thickness)) + geom_boxplot(outlier.shape = NA) + geom_point()+ 
-  geom_point(data = combined_df, x = 'modelled', aes(y=thck), color = 'red') + theme_classic()+ theme(axis.text.x = element_text(angle = 45, hjust=1))
+# bed_thickness_climate_sandy_gen_selected <- bed_thickness_climate_sandy_gen %>% filter(element_general_type == selected_element)
+# bed_thickness_climate_sandy_gen_selected[nrow(bed_thickness_climate_sandy_gen_selected)+1,] = list('all',0,'all','all','all','modelled')
+# ggplot(bed_thickness_climate_sandy_gen_selected, aes(x=sys_name, y = bed_thickness)) + geom_boxplot(outlier.shape = NA) + geom_point()+ 
+#   geom_point(data = combined_df, x = 'modelled', aes(y=thck), color = 'red') + theme_classic()+ theme(axis.text.x = element_text(angle = 45, hjust=1))
 
 #mud thickness validating plot
 
-mud_thickness_validating_plot <- ggplot(selected_mud_thickness_values, aes(x=facies_type, y = stacked_thickness))+
-  geom_boxplot(outlier.shape = 4, lwd=0.23, width = 0.9)+
+
+mud_thickness_validating_plot <- ggplot()+
+  geom_boxplot(data = selected_mud_thickness_values, aes(x=facies_type, y = stacked_thickness), outlier.shape = 4, outlier.alpha = 0.5, lwd=0.23, width = 0.7)+
   stat_summary(fun.y = 'mean', size = 0.2, shape = 15)+
-  geom_text(label = paste('n=',nrow(selected_mud_thickness_values), sep = ''), x=0.75, y=1.55, size = 7/.pt)+
-  geom_point(data = combined_df_mud, aes(y=thck), x = 'M', size = 4, shape = 18, color = 'red', alpha = 0.5)+
-  geom_text(label = paste('n=',nrow(combined_df_mud), sep = ''), y=1.50, x=0.75, size = 7/.pt, color = 'red')+
-  coord_cartesian(ylim = c(0,1.5))+
+  geom_text(aes(label = paste('n=',nrow(selected_mud_thickness_values), sep = '')), x=0.75, y=0.75, size = 7/.pt)+
+  geom_point(data = combined_df_mud, aes(y=thck), x = 'M', size = 4, shape = 23, fill = 'red', alpha = 0.5, stroke = 0.12,)+
+  geom_text(aes(label = paste('n=',nrow(combined_df_mud), sep = '')), y=0.70, x=0.75, size = 7/.pt, color = 'red')+
+  coord_cartesian(ylim = c(0,0.75))+
+  scale_y_continuous(breaks = seq(0,0.75, by = 0.25))+
   theme_classic()+
   theme(
     axis.text.x = element_text(color = "black", size = 9),
@@ -510,19 +581,20 @@ mud_thickness_validating_plot <- ggplot(selected_mud_thickness_values, aes(x=fac
     plot.title = element_text(color = 'black', size = 10),
     legend.position = 'bottom')+
   labs(
+    title = 'Mud thickness',
     y= 'Mud thickness (m)')
 mud_thickness_validating_plot
 
 #Log trend validating plot
 
-log_trend_validating_plot <- ggplot(data = selected_log_vertical_bed_thickness, (aes(x=element_general_type, y = log_trend_value))) + 
-  geom_point(size = 2)+
+log_trend_validating_plot <- ggplot() + 
+  geom_point(data = selected_log_vertical_bed_thickness, (aes(x=element_general_type, y = log_trend_value)),position=position_jitter(width = 0.1), shape = 21, size = 2, stroke = 0.12, fill = '#256D8C')+
   annotate(geom= 'text', x=0.5, y= 0.3, label='thickening upward', angle = 90, size = 7/.pt)+
   annotate(geom= 'text', x=0.5, y= -0.3, label='thinning upward', angle = 90, size = 7/.pt)+
   coord_cartesian(ylim = c(-0.75,0.75))+
   geom_hline(yintercept = 0, alpha = 0.3, lwd=0.23)+
   geom_text(label = paste('n=',nrow(selected_log_vertical_bed_thickness), sep = ''), y=0.75, size = 7/.pt)+
-  geom_point(aes(y = calculated_log_trend_value), color = 'red', size = 4, shape = 18, alpha = 0.15)+
+  geom_point(aes(x = selected_element, y = calculated_log_trend_value), fill = 'red', size = 4, shape = 23, stroke = 0.12, alpha = 0.75)+
   theme_classic()+
   theme(
     axis.text.x = element_text(color = "black", size = 9),
@@ -534,9 +606,10 @@ log_trend_validating_plot <- ggplot(data = selected_log_vertical_bed_thickness, 
     plot.title = element_text(color = 'black', size = 10),
     legend.position = 'bottom')+
     labs(
+      title = 'Vertical trends',
       y= 'Thickness trend value')
 log_trend_validating_plot
-hist(selected_log_vertical_bed_thickness$log_trend_value)
+# hist(selected_log_vertical_bed_thickness$log_trend_value)
 
 #combined validating plots
 
@@ -545,4 +618,4 @@ validating_plots <- ggarrange(
 nrow =2
 )
 validating_plots
-ggsave(validating_plots, filename = paste('log_generator_outputs/','val',file_name,'.pdf', sep=''), width = 160, height = 130, units = 'mm', device = 'pdf')
+ggsave(validating_plots, filename = paste(file_path,'/',file_name,'_validation','.pdf', sep=''), device = 'pdf', width = 160, height = 160, units = 'mm')
